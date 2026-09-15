@@ -1,0 +1,82 @@
+From 6342ab970ee894201ef307ebda826b0445ceddf1 Mon Sep 17 00:00:00 2001
+Message-ID: <6342ab970ee894201ef307ebda826b0445ceddf1.1791283768.git.ben.grande.b@gmail.com>
+From: Ben Grande <ben.grande.b@gmail.com>
+Date: Mon, 14 Sep 2026 15:22:02 -0400
+Subject: [PATCH libvirt] libxl: Fire reboot event
+
+Fired on "on_reboot" values "restart" and "destroy", so event listeners
+can react to this request. The value "destroy" is useful for
+applications that have routines run between restarts, therefore the
+reboot event is still fired in this case. If the value is set to
+"preserve" then it doesn't seem appropriate to fire reboot event.
+
+Resolves: https://github.com/QubesOS/qubes-issues/issues/8196
+Signed-off-by: Ben Grande <ben.grande.b@gmail.com>
+---
+ docs/formatdomain.rst    | 14 +++++++++++---
+ src/libvirt-domain.c     |  4 +++-
+ src/libxl/libxl_domain.c |  4 ++++
+ 4 files changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/docs/formatdomain.rst b/docs/formatdomain.rst
+index e4eb2d9..a5388c5 100644
+--- a/docs/formatdomain.rst
++++ b/docs/formatdomain.rst
+@@ -2047,9 +2047,17 @@ Each of these states allow for the same four possible actions.
+    The domain will be terminated and then restarted with a new name. (Only
+    supported by the libxl hypervisor driver.)
+ 
+-QEMU/KVM/HVF supports the ``on_poweroff`` and ``on_reboot`` events handling the
+-``destroy`` and ``restart`` actions, but the combination of ``on_poweroff`` set
+-to ``restart`` and ``on_reboot`` set to ``destroy`` is forbidden.
++QEMU/KVM/HVF/XEN supports the ``on_poweroff`` and ``on_reboot`` events handling
++the ``destroy`` and ``restart`` actions, in which case, a notification is
++available when the reboot fires, using the event ID
++``VIR_DOMAIN_EVENT_ID_REBOOT``.
++
++Setting ``on_reboot`` to ``destroy``, prevents libvirt from restarting the
++domain on its own, thus allowing a VMM that monitors
++``VIR_DOMAIN_EVENT_ID_REBOOT``, to run their own stop and start procedures.
++
++The combination of ``on_poweroff`` set to ``restart`` and ``on_reboot`` set to
++``destroy`` is forbidden.
+ 
+ The ``on_crash`` event supports these additional actions :since:`since 0.8.4`.
+ 
+diff --git a/src/libvirt-domain.c b/src/libvirt-domain.c
+index acd9ffc..95764eb 100644
+--- a/src/libvirt-domain.c
++++ b/src/libvirt-domain.c
+@@ -1779,7 +1779,9 @@ virDomainShutdownFlags(virDomainPtr domain, unsigned int flags)
+  * Note that the guest OS may ignore the request.
+  * Additionally, the hypervisor may check and support the domain
+  * 'on_reboot' XML setting resulting in a domain that shuts down instead
+- * of rebooting.
++ * of rebooting. Depending on the hypervisor and 'on_reboot' setting,
++ * VIR_DOMAIN_EVENT_ID_REBOOT might be emitted. For more information, see
++ * https://libvirt.org/formatdomain.html#events-configuration
+  *
+  * If @flags is set to zero, then the hypervisor will choose the
+  * method of shutdown it considers best. To have greater control
+diff --git a/src/libxl/libxl_domain.c b/src/libxl/libxl_domain.c
+index 51dc3ed..8163604 100644
+--- a/src/libxl/libxl_domain.c
++++ b/src/libxl/libxl_domain.c
+@@ -550,10 +550,14 @@ libxlDomainShutdownThread(void *opaque)
+                                            VIR_DOMAIN_EVENT_STOPPED_SHUTDOWN);
+         switch ((virDomainLifecycleAction) vm->def->onReboot) {
+         case VIR_DOMAIN_LIFECYCLE_ACTION_DESTROY:
++            virObjectEventStateQueue(driver->domainEventState,
++                                            virDomainEventRebootNewFromObj(vm));
+             libxlDomainShutdownHandleDestroy(driver, vm);
+             goto endjob;
+         case VIR_DOMAIN_LIFECYCLE_ACTION_RESTART:
+         case VIR_DOMAIN_LIFECYCLE_ACTION_RESTART_RENAME:
++            virObjectEventStateQueue(driver->domainEventState,
++                                            virDomainEventRebootNewFromObj(vm));
+             libxlDomainShutdownHandleRestart(driver, vm);
+             goto endjob;
+         case VIR_DOMAIN_LIFECYCLE_ACTION_PRESERVE:
+-- 
+Benjamin Grande
+
